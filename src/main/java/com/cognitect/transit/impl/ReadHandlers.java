@@ -4,7 +4,7 @@
 package com.cognitect.transit.impl;
 
 import com.cognitect.transit.*;
-import org.apache.commons.codec.binary.Base64;
+import java.util.Base64;
 import java.time.format.DateTimeFormatter;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -28,7 +28,7 @@ public class ReadHandlers {
         @Override
         public Object fromRep(String rep) {
 
-            return Base64.decodeBase64(rep.getBytes());
+            return Base64.getDecoder().decode(rep.getBytes());
         }
     }
 

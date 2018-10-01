@@ -5,7 +5,7 @@ package com.cognitect.transit.impl;
 
 import com.cognitect.transit.WriteHandler;
 import com.fasterxml.jackson.core.JsonGenerator;
-import org.apache.commons.codec.binary.Base64;
+import java.util.Base64;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -122,7 +122,7 @@ public class JsonEmitter extends AbstractEmitter {
     @Override
     public void emitBinary(Object b, boolean asMapKey, WriteCache cache) throws Exception {
 
-        byte[] encodedBytes = Base64.encodeBase64((byte[])b);
+        byte[] encodedBytes = Base64.getEncoder().encode((byte[])b);
         emitString(Constants.ESC_STR, "b", new String(encodedBytes), asMapKey, cache);
     }
 
