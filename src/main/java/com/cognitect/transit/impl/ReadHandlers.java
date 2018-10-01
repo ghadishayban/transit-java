@@ -5,6 +5,9 @@ package com.cognitect.transit.impl;
 
 import com.cognitect.transit.*;
 import java.util.Base64;
+import java.time.format.DateTimeFormatter;
+import java.time.Instant;
+import java.time.ZoneOffset;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -241,12 +244,12 @@ public class ReadHandlers {
     }
 
     public static class VerboseTimeReadHandler implements ReadHandler<Object, String> {
+        private static final DateTimeFormatter DTF = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss[[.SSS[['Z'][-00:00]]]['Z']]").withZone(ZoneOffset.UTC);
 
         @Override
         public Object fromRep(String rep) {
-            Calendar t = javax.xml.bind.DatatypeConverter.parseDateTime(rep);
-            t.setTimeZone(TimeZone.getTimeZone("Zulu"));
-            return t.getTime();
+            Instant inst = DTF.parse(rep, Instant::from);
+            return Date.from(inst);
         }
     }
 
