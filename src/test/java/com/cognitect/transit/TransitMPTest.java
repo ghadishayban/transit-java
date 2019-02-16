@@ -21,8 +21,11 @@ import junit.framework.Test;
 import junit.framework.TestCase;
 import junit.framework.TestSuite;
 import org.apache.commons.codec.binary.Base64;
-import org.msgpack.MessagePack;
-import org.msgpack.packer.Packer;
+import org.msgpack.core.MessageBufferPacker;
+import org.msgpack.core.MessagePack;
+
+import org.msgpack.value.Value;
+import org.msgpack.value.ValueFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -33,6 +36,7 @@ import java.math.BigInteger;
 import java.net.URISyntaxException;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class TransitMPTest extends TestCase {
 
@@ -44,18 +48,79 @@ public class TransitMPTest extends TestCase {
         return new TestSuite(TransitMPTest.class);
     }
 
-    // Reading
+    static Value asValue(Object o) {
 
+        if (o == null) {
+            return ValueFactory.newNil();
+        } else if (o instanceof Integer) {
+            return ValueFactory.newInteger((Integer) o);
+        } else if (o instanceof Long) {
+            return ValueFactory.newInteger((Long) o);
+        } else if (o instanceof Double) {
+            return ValueFactory.newFloat((Double) o);
+        } else if (o instanceof String) {
+            return ValueFactory.newString((String) o);
+        } else if (o instanceof Boolean) {
+            return ValueFactory.newBoolean((Boolean) o);
+        } else if (o instanceof List) {
+            Value[] vs = ((List<Object>) o)
+                    .stream()
+                    .map(TransitMPTest::asValue)
+                    .toArray(Value[]::new);
+            return ValueFactory.newArray(vs, true);
+        } else if (o instanceof Map) {
+            List<Value> vs = new ArrayList<>();
+            ((Map<Object,Object>) o).entrySet().forEach(e -> {
+                vs.add(asValue(e.getKey()));
+                vs.add(asValue(e.getValue()));
+            });
+            return ValueFactory.newMap(vs.stream().toArray(Value[]::new), true);
+        } else if (o.getClass().isArray()) {
+            // convert all to list
+            Class comp = o.getClass().getComponentType();
+            if (comp.isPrimitive()) {
+                if (comp.equals(Long.TYPE)) {
+                    List ls = Arrays.stream((long[]) o).boxed().collect(Collectors.toList());
+                    return asValue(ls);
+                } else if (comp.equals(Integer.TYPE)) {
+                    List ls = Arrays.stream((int[]) o).boxed().collect(Collectors.toList());
+                    return asValue(ls);
+                } else {
+                    throw new UnsupportedOperationException("cannot convert array of " + comp);
+                }
+            } else {
+                List ls = Arrays.stream((Object[]) o).collect(Collectors.toList());
+                return asValue(ls);
+            }
+        } else {
+            throw new UnsupportedOperationException("cannot convert " + o.getClass());
+        }
+    }
+
+    static Map mapOf(Object... kvs) {
+        Map m = new HashMap();
+        for (int i = 0; i < kvs.length; i+=2){
+            m.put(kvs[i], kvs[i+1]);
+        }
+        return m;
+    }
+    static List listOf(Object... vs) {
+        List l = new ArrayList();
+        for (Object v : vs) {
+            l.add(v);
+        }
+        return l;
+    }
+
+    // Reading
     public Reader readerOf(Object... things) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        MessagePack msgpack = new MessagePack();
-        Packer packer = msgpack.createPacker(out);
+        MessageBufferPacker msgpack = MessagePack.newDefaultBufferPacker();
 
         for (Object o : things) {
-            packer.write(o);
+            msgpack.packValue(asValue(o));
         }
 
-        InputStream in = new ByteArrayInputStream(out.toByteArray());
+        InputStream in = new ByteArrayInputStream(msgpack.toByteArray());
         return TransitFactory.reader(TransitFactory.Format.MSGPACK, in);
 
     }
@@ -74,10 +139,7 @@ public class TransitMPTest extends TestCase {
         assertTrue((Boolean)readerOf("~?t").read());
         assertFalse((Boolean) readerOf("~?f").read());
 
-        Map thing = new HashMap() {{
-            put("~?t", 1);
-            put("~?f", 2);
-        }};
+        Map thing = mapOf("~?t", 1, "~?f", 2);
 
         Map m = readerOf(thing).read();
         assertEquals(1L, m.get(true));
@@ -93,11 +155,9 @@ public class TransitMPTest extends TestCase {
         Object v = readerOf("~:foo").read();
         assertEquals(":foo", v.toString());
 
-        List thing = new ArrayList() {{
-            add("~:foo");
-            add("^" + (char)WriteCache.BASE_CHAR_IDX);
-            add("^" + (char)WriteCache.BASE_CHAR_IDX);
-        }};
+        List thing = listOf("~:foo",
+                "^" + (char) WriteCache.BASE_CHAR_IDX,
+                "^" + (char) WriteCache.BASE_CHAR_IDX);
 
         List v2 = readerOf(thing).read();
         assertEquals(":foo", v2.get(0).toString());
@@ -117,7 +177,7 @@ public class TransitMPTest extends TestCase {
 
     public void testReadDouble() throws IOException {
 
-        assertEquals(new Double("42.5"), readerOf("~d42.5").read());
+        assertEquals(Double.parseDouble("42.5"), readerOf("~d42.5").read());
     }
 
     public void testReadBigDecimal() throws IOException {
@@ -156,9 +216,8 @@ public class TransitMPTest extends TestCase {
         assertReadsFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
         assertReadsFormat("yyyy-MM-dd'T'HH:mm:ss.SSS-00:00");
 
-        Map thing = new HashMap() {{
-            put("~#m", t);
-        }};
+        Map thing = new HashMap();
+        thing.put("~#m", t);
 
         assertEquals(t, ((Date)readerOf(thing).read()).getTime());
     }
@@ -171,13 +230,7 @@ public class TransitMPTest extends TestCase {
 
         assertEquals(0, uuid.compareTo((UUID)readerOf("~u" + uuid.toString()).read()));
 
-        List thing = new ArrayList() {{
-            add("~#u");
-            add(new ArrayList() {{
-                add(hi64);
-                add(lo64);
-            }});
-        }};
+        List thing = listOf("~#u", listOf(hi64, lo64));
 
         assertEquals(0, uuid.compareTo((UUID)readerOf(thing).read()));
     }
@@ -226,9 +279,7 @@ public class TransitMPTest extends TestCase {
 
         final List l = Arrays.asList(1L, 2L);
 
-        Map thing = new HashMap() {{
-            put("~#point", l);
-        }};
+        Map thing = mapOf("~#point", l);
 
         assertEquals(TransitFactory.taggedValue("point", l), readerOf(thing).read());
     }
@@ -247,13 +298,7 @@ public class TransitMPTest extends TestCase {
     }
 
     public void testReadArrayWithNestedDoubles() throws IOException {
-        List thing = new ArrayList() {{
-            add(-3.14159);
-            add(3.14159);
-            add(4.0E11);
-            add(2.998E8);
-            add(6.626E-34);
-        }};
+        List thing = listOf(-3.14159, 3.14159, 4.0E11, 2.998E8, 6.626E-34);
 
         List l = readerOf(thing).read();
 
@@ -267,11 +312,10 @@ public class TransitMPTest extends TestCase {
         Date d = new Date();
         final String t = JsonParser.getDateTimeFormat().format(d);
 
-        List thing = new ArrayList() {{
-            add("~:foo");
-            add("~t" + t);
-            add("~?t");
-        }};
+        List thing = listOf("~:foo",
+                "~t" + t,
+                "~?t");
+
 
         List l = readerOf(thing).read();
 
@@ -281,17 +325,16 @@ public class TransitMPTest extends TestCase {
         assertEquals(d.getTime(), ((Date)l.get(1)).getTime());
         assertTrue((Boolean) l.get(2));
 
-        final Date da[] = {new Date(-6106017600000l),
+        final Date da[] = {new Date(-6106017600000L),
                            new Date(0),
-                           new Date(946728000000l),
-                           new Date(1396909037000l)};
+                           new Date(946728000000L),
+                           new Date(1396909037000L)};
 
-        List dates = new ArrayList() {{
-            add("~t" + JsonParser.getDateTimeFormat().format(da[0]));
-            add("~t" + JsonParser.getDateTimeFormat().format(da[1]));
-            add("~t" + JsonParser.getDateTimeFormat().format(da[2]));
-            add("~t" + JsonParser.getDateTimeFormat().format(da[3]));
-        }};
+        List dates = listOf(
+                "~t" + JsonParser.getDateTimeFormat().format(da[0]),
+                "~t" + JsonParser.getDateTimeFormat().format(da[1]),
+                "~t" + JsonParser.getDateTimeFormat().format(da[2]),
+                "~t" + JsonParser.getDateTimeFormat().format(da[3]));
 
         l = readerOf(dates).read();
 
@@ -303,10 +346,7 @@ public class TransitMPTest extends TestCase {
 
     public void testReadMap() throws IOException {
 
-        Map thing = new HashMap() {{
-            put("a", 2);
-            put("b", 4);
-        }};
+        Map thing = mapOf("a", 2, "b", 4);
 
         Map m = readerOf(thing).read();
 
@@ -320,10 +360,7 @@ public class TransitMPTest extends TestCase {
 
         final String uuid = UUID.randomUUID().toString();
 
-        Map thing = new HashMap() {{
-            put("a", "~:foo");
-            put("b", "~u" + uuid);
-        }};
+        Map thing = mapOf("a", "~:foo", "b", "~u" + uuid);
 
         Map m = readerOf(thing).read();
 
@@ -337,9 +374,7 @@ public class TransitMPTest extends TestCase {
 
         final int[] ints = {1,2,3};
 
-        Map thing = new HashMap() {{
-            put("~#set", ints);
-        }};
+        Map thing = mapOf( "~#set", ints);
 
         Set s = readerOf(thing).read();
 
@@ -353,9 +388,7 @@ public class TransitMPTest extends TestCase {
     public void testReadList() throws IOException {
         final int[] ints = {1,2,3};
 
-        Map thing = new HashMap() {{
-            put("~#list", ints);
-        }};
+        Map thing = mapOf("~#list", ints);
 
         List l = readerOf(thing).read();
 
@@ -370,9 +403,7 @@ public class TransitMPTest extends TestCase {
     public void testReadRatio() throws IOException {
         final String[] ratioRep = {"~n1", "~n2"};
 
-        Map thing = new HashMap() {{
-            put("~#ratio", ratioRep);
-        }};
+        Map thing = mapOf("~#ratio", ratioRep);
 
         Ratio r = readerOf(thing).read();
 
@@ -385,24 +416,13 @@ public class TransitMPTest extends TestCase {
         final String[] ratioRep = {"~n1", "~n2"};
         final int[] mints = {1,2,3};
 
-        final Map ratio = new HashMap() {{
-            put("~#ratio", ratioRep);
-        }};
+        final Map ratio = mapOf("~#ratio", ratioRep);
 
-        final Map list = new HashMap() {{
-            put("~#list", mints);
-        }};
+        final Map list = mapOf("~#list", mints);
 
-        final List things = new ArrayList() {{
-            add(ratio);
-            add(1);
-            add(list);
-            add(2);
-        }};
+        final List things = listOf(ratio, 1, list, 2);
 
-        final Map thing = new HashMap() {{
-            put("~#cmap", things);
-        }};
+        final Map thing = mapOf("~#cmap", things);
 
         Map m = readerOf(thing).read();
 
